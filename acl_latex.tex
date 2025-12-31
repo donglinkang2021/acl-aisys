@@ -36,7 +36,6 @@
 %\setlength\titlebox{<dim>}
 %
 % and set <dim> to something 5cm or larger.
-
 \usepackage[most]{tcolorbox}
 \usepackage{xcolor}
 \usepackage{listings}
@@ -49,8 +48,8 @@
 % 基础代码样式配置
 \lstset{
     basicstyle=\small\ttfamily,
-    breaklines=true,               % 允许自动换行
-    breakatwhitespace=false,       % 允许在非空格处换行
+    breaklines=true,
+    breakatwhitespace=false,
     columns=flexible,
     keepspaces=true,
     xleftmargin=0pt,
@@ -62,43 +61,50 @@
     fonttitle=\bfseries\ttfamily,
     title=#1,
     enhanced,
-    breakable,
+    breakable,            % [关键] 允许跨页，解决大部分留白问题
+    before skip=2pt,      % 减小盒子前的间距
+    after skip=2pt,       % 减小盒子后的间距
     attach title to upper,
-    after title={\medskip\hrule\medskip},
+    after title={\par\smallskip\hrule\smallskip}, % 减小标题下方的垂直间距
     coltitle=black,
-    left=5pt,
-    right=5pt,
-    top=5pt,
-    bottom=5pt,
+    left=3pt,             % 进一步压缩内边距
+    right=3pt,
+    top=3pt,
+    bottom=3pt,
     boxrule=0.5pt,
-    arc=3pt
+    arc=2pt
 }
 
-% 使用 tcblisting 包装，解决换行溢出问题
+% Prompt部分：同样加上 breakable 防止内部无法拆分
 \newtcolorbox{promptpart}{
     colback=promptgray,
     boxrule=0pt,
     frame hidden,
-    left=2pt, right=2pt, top=2pt, bottom=2pt,
-    fontupper=\small\bfseries,
+    breakable,
+    left=2pt, right=2pt, top=1pt, bottom=1pt,
+    fontupper=\small, % 移除加粗，因为代码已经用了 ttfamily，加粗会显得很臃肿并增加高度
     title=Prompt:,
     fonttitle=\small\bfseries,
     coltitle=black!70,
     attach title to upper={\\},
-    after upper=
+    before skip=0pt,
+    after skip=2pt
 }
 
+% Generated部分
 \newtcolorbox{genpart}{
     colback=textblue,
     boxrule=0pt,
     frame hidden,
-    left=2pt, right=2pt, top=2pt, bottom=2pt,
-    fontupper=\small\bfseries,
+    breakable,
+    left=2pt, right=2pt, top=1pt, bottom=1pt,
+    fontupper=\small,
     title=Generated Text:,
     fonttitle=\small\bfseries,
     coltitle=black!70,
     attach title to upper={\\},
-    after upper=
+    before skip=2pt,
+    after skip=0pt
 }
 
 \title{nanoRFT: An Efficient On-Policy Inference Engine for DLMs}
