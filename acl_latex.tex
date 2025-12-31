@@ -2,7 +2,7 @@
 
 % Change "review" to "final" to generate the final (sometimes called camera-ready) version.
 % Change to "preprint" to generate a non-anonymous version with page numbers.
-\usepackage[final]{acl}
+\usepackage[preprint]{acl}
 
 % Standard package includes
 \usepackage{times}
@@ -172,7 +172,7 @@
 \maketitle
 
 \begin{abstract}
-Diffusion Language Models (DLMs) have emerged as promising alternatives to autoregressive (AR) models, offering unique advantages in parallel generation and complex reasoning. However, their post-training efficiency, particularly via on-policy Reinforcement Learning (RL), is severely constrained by the system-level "Reload-and-Rollout" bottleneck. Existing pipelines rely on disparate training and inference processes coupled via slow file-system I/O, causing significant GPU underutilization. To address this, we introduce \textbf{nanoRFT}, a lightweight and unified framework implementing System-Algorithm Co-design. nanoRFT features a "Twin-Engine" inference backend optimized for both AR (e.g., Qwen) and Diffusion (e.g., LLaDA, SDAR) architectures. By replacing disk-based checkpointing with an NCCL-based real-time parameter broadcast mechanism, we reduce model synchronization latency from minutes to the sub-second level (\textbf{10$\sim$50ms} for LLMs/DLMs). Experimental results on the Countdown reasoning task demonstrate that our system sustains a rollout throughput of \textbf{19,444 tokens/sec} on NVIDIA H200 GPUs—a \textbf{21.76\% improvement} over the vLLM baseline. Furthermore, our specialized kernels for DLMs achieve up to \textbf{1.46$\times$ speedup} compared to existing DLMs engines like JetEngine. We validate the framework by supporting stable on-policy RL algorithms (GRPO) with negligible overhead, providing a scalable baseline for the efficient alignment of next-generation generative models.
+Diffusion Language Models (DLMs) offer significant advantages in parallel generation but suffer from the "Reload-and-Rollout" bottleneck during on-policy Reinforcement Learning (RL). This bottleneck stems from inefficient I/O and synchronization between training and inference engines, leading to substantial GPU underutilization. We propose \textbf{nanoRFT}, a unified framework featuring a "Twin-Engine" backend optimized for both Autoregressive and Diffusion architectures. By implementing an NCCL-based real-time parameter broadcast mechanism, nanoRFT reduces model synchronization latency to 10--50ms. Experimental results on the Reasoning task demonstrate that nanoRFT achieves a rollout throughput of 19,444 tokens/sec on NVIDIA H200 GPUs, representing a 21.76\% improvement over vLLM and up to 1.46$\times$ speedup over specialized DLM engines. Our framework provides a scalable and efficient baseline for the alignment and post-training of next-generation generative models.
 \end{abstract}
 
 \section{Introduction}
@@ -228,7 +228,7 @@ Despite their efficiency in static serving scenarios, these inference engines sh
 
 \begin{figure*}[ht]
     \centering
-    \includegraphics[width=0.9\textwidth]{figures/nanorft.pdf} 
+    \includegraphics[width=1.0\textwidth]{figures/nanorft.pdf} 
     \caption{System Architecture of nanoRFT. The Trainer node (GPU 0) performs model updates using HuggingFace, while Inference Workers (GPU 1+) run the optimized inference engines (\texttt{nanovllm}/\texttt{nanovdlm}). Updated weights are broadcasted in real-time via NCCL, enabling efficient on-policy rollouts.}
     \label{fig:arch}
 \end{figure*}
@@ -293,22 +293,16 @@ As shown in Table~\ref{tab:latency}, our NCCL-based memory broadcast mechanism s
 
 \begin{table}[ht]
 \centering
-\footnotesize
-\setlength{\tabcolsep}{6pt}
+\small
 \caption{Synchronization latency comparison: Traditional Disk I/O (Save + Load) vs. nanoRFT (NCCL Broadcast).}
 \label{tab:latency}
-\begin{tabular}{@{}llc@{}} 
+\begin{tabular}{@{}lcc@{}} 
 \toprule
-\textbf{Architecture} & \textbf{Method} & \textbf{Latency} \\ \midrule
-Qwen2.5-1.5B (AR) & Disk I/O (Baseline) & $\ge$3.0s \\
-\textbf{Qwen2.5-1.5B (AR)} & \textbf{nanoRFT (Ours)} & \textbf{$\sim$30ms} \\ 
-\midrule
-Qwen2.5-3B (AR) & Disk I/O (Baseline) & $\ge$5.0s \\
-\textbf{Qwen2.5-3B (AR)} & \textbf{nanoRFT (Ours)} & \textbf{$\sim$30ms} \\ \midrule
-SDAR-8B-Chat (DLM) & Disk I/O (Baseline) & $\ge$15.0s \\
-\textbf{SDAR-8B-Chat (DLM)} & \textbf{nanoRFT (Ours)} & \textbf{$\sim$10ms} \\ \midrule
-LLaDA-8B-Instruct (DLM) & Disk I/O (Baseline) & $\ge$18.0s \\
-\textbf{LLaDA-8B-Instruct (DLM)} & \textbf{nanoRFT (Ours)} & \textbf{$\sim$10ms} \\ \bottomrule
+\textbf{Model (Architecture)} & \textbf{Disk I/O} & \textbf{nanoRFT (Ours)} \\ \midrule
+Qwen2.5-1.5B (AR) & $\ge$3.0s & \textbf{$\sim$30ms} \\
+Qwen2.5-3B (AR)   & $\ge$5.0s & \textbf{$\sim$30ms} \\ \midrule
+SDAR-8B (DLM)     & $\ge$15.0s & \textbf{$\sim$10ms} \\
+LLaDA-8B (DLM)    & $\ge$18.0s & \textbf{$\sim$10ms} \\ \bottomrule
 \end{tabular}
 \end{table}
 
@@ -320,7 +314,7 @@ To validate the efficiency of the underlying engine, we reference both reported 
 Building on this backend, our specialized kernels for Deep Language Models (DLMs) in \texttt{nanoRFT} significantly outperform the \texttt{JetEngine} framework~\citep{JetAstra2025}. As summarized in Table~\ref{tab:tps_comparison}, \texttt{nanoRFT} achieves consistent speedups across various configurations. Notably, for the \texttt{LLaDA-8B-Instruct} model, \texttt{nanoRFT} achieves its highest throughput of \textbf{1,144.44 tps} at a block size of 32, representing a \textbf{1.30$\times$ speedup}. At a block size of 64, it maintains \textbf{1,100.90 tps}, a \textbf{1.11$\times$ improvement} over \texttt{JetEngine}. Across the SDAR tasks, \texttt{nanoRFT} also maintains a steady performance lead, with speedups ranging from \textbf{1.07$\times$ to 1.46$\times$}, peaking at \textbf{4,807.24 tps} for the SDAR-8B-Chat model.
 
 % --- Table 1: Hardware Benchmark (vLLM vs Nano-vLLM) ---
-\begin{table}[ht]
+\begin{table*}[ht]
 \centering
 \footnotesize
 \caption{Baseline throughput comparison. RTX 4070 results are reported from the \texttt{nano-vllm} repository~\citep{nanovllm2025}, while H200 results are derived from our internal experiments using \texttt{Qwen3-0.6B} (256 concurrent requests).}
@@ -339,10 +333,10 @@ Building on this backend, our specialized kernels for Deep Language Models (DLMs
  & \textbf{Nano-vLLM} & 133,966 & \textbf{6.89} & \textbf{19,444.55 tps} \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 % --- Table 2: Optimized JetEngine vs nanoRFT with Speedup Column ---
-\begin{table}[ht]
+\begin{table*}[ht]
 \centering
 \footnotesize
 \setlength{\tabcolsep}{8pt}
@@ -361,7 +355,7 @@ Building on this backend, our specialized kernels for Deep Language Models (DLMs
  & 16  & 3,291.20 & \textbf{4,807.24} & 1.46$\times$ \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \subsection{Training Convergence and Reasoning Qualitative Analysis}
 
@@ -388,9 +382,9 @@ Overall, these results confirm that \texttt{nanoRFT} successfully facilitates st
 
 \section{Collaboration}
 
-To ensure the successful delivery of \textbf{nanoRFT}, the team adopted a cross-functional collaboration model. Each member contributed equally (25\%) across system design, algorithmic implementation, and experimental validation.
+To ensure the successful delivery of \textbf{nanoRFT}, the team adopted a cross-functional collaboration model. Each member contributed equally (25\%) across system design, algorithmic implementation, and experimental validation. The breakdown of responsibilities is summarized in Table~\ref{tab:collaboration}.
 
-\begin{table}[ht]
+\begin{table*}[ht]
 \centering
 \small
 \caption{Team Member Contributions and Responsibilities.}
@@ -403,7 +397,7 @@ Jiaxin Wan & 25\% & \textbf{DLM Backend \& Performance:} Developed the \texttt{n
 Kangyu Wang & 25\% & \textbf{Strategy Design \& Evaluation:} Collaborated on DLM decoding strategies and system testing; Led the comprehensive technical report drafting and documentation, conducted large-scale rollout testing on the Countdown reasoning benchmark. \\ \addlinespace
 Bohao Lyu & 25\% & \textbf{Quality Assurance \& Documentation:} Led the systematic evaluation of throughput/latency metrics; conducted the literature survey on DLM efficiency; coordinated the technical report structure and experimental data visualization. \\ \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \section{Conclusion}
 
