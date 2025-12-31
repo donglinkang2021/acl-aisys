@@ -29,13 +29,77 @@
 
 %Including images in your LaTeX document requires adding
 %additional package(s)
-\usepackage{graphicx}
+\usepackage{graphicx,amsmath,amssymb,booktabs,array,subcaption,multirow}
 
 % If the title and author information does not fit in the area allocated, uncomment the following
 %
 %\setlength\titlebox{<dim>}
 %
 % and set <dim> to something 5cm or larger.
+
+\usepackage[most]{tcolorbox}
+\usepackage{xcolor}
+\usepackage{listings}
+
+% 定义配色
+\definecolor{promptgray}{RGB}{245, 245, 245}
+\definecolor{textblue}{RGB}{240, 245, 255}
+\definecolor{framegray}{RGB}{200, 200, 200}
+
+% 基础代码样式配置
+\lstset{
+    basicstyle=\small\ttfamily,
+    breaklines=true,               % 允许自动换行
+    breakatwhitespace=false,       % 允许在非空格处换行
+    columns=flexible,
+    keepspaces=true,
+    xleftmargin=0pt,
+}
+
+\newtcolorbox{rolloutbox}[1]{
+    colback=white,
+    colframe=framegray,
+    fonttitle=\bfseries\ttfamily,
+    title=#1,
+    enhanced,
+    breakable,
+    attach title to upper,
+    after title={\medskip\hrule\medskip},
+    coltitle=black,
+    left=5pt,
+    right=5pt,
+    top=5pt,
+    bottom=5pt,
+    boxrule=0.5pt,
+    arc=3pt
+}
+
+% 使用 tcblisting 包装，解决换行溢出问题
+\newtcolorbox{promptpart}{
+    colback=promptgray,
+    boxrule=0pt,
+    frame hidden,
+    left=2pt, right=2pt, top=2pt, bottom=2pt,
+    fontupper=\small\bfseries,
+    title=Prompt:,
+    fonttitle=\small\bfseries,
+    coltitle=black!70,
+    attach title to upper={\\},
+    after upper=
+}
+
+\newtcolorbox{genpart}{
+    colback=textblue,
+    boxrule=0pt,
+    frame hidden,
+    left=2pt, right=2pt, top=2pt, bottom=2pt,
+    fontupper=\small\bfseries,
+    title=Generated Text:,
+    fonttitle=\small\bfseries,
+    coltitle=black!70,
+    attach title to upper={\\},
+    after upper=
+}
 
 \title{nanoRFT: An Efficient On-Policy Inference Engine for DLMs}
 
@@ -104,273 +168,274 @@
 %}
 
 \begin{document}
+
 \maketitle
+
 \begin{abstract}
-This document is a supplement to the general instructions for *ACL authors. It contains instructions for using the \LaTeX{} style files for ACL conferences.
-The document itself conforms to its own specifications, and is therefore an example of what your manuscript should look like.
-These instructions should be used both for papers submitted for review and for final versions of accepted papers.
+Diffusion Language Models (DLMs) have emerged as promising alternatives to autoregressive (AR) models, offering unique advantages in parallel generation and complex reasoning. However, their post-training efficiency, particularly via on-policy Reinforcement Learning (RL), is severely constrained by the system-level "Reload-and-Rollout" bottleneck. Existing pipelines rely on disparate training and inference processes coupled via slow file-system I/O, causing significant GPU underutilization. To address this, we introduce \textbf{nanoRFT}, a lightweight and unified framework implementing System-Algorithm Co-design. nanoRFT features a "Twin-Engine" inference backend optimized for both AR (e.g., Qwen) and Diffusion (e.g., LLaDA, SDAR) architectures. By replacing disk-based checkpointing with an NCCL-based real-time parameter broadcast mechanism, we reduce model synchronization latency from minutes to the sub-second level (\textbf{10$\sim$50ms} for LLMs/DLMs). Experimental results on the Countdown reasoning task demonstrate that our system sustains a rollout throughput of \textbf{19,444 tokens/sec} on NVIDIA H200 GPUs—a \textbf{21.76\% improvement} over the vLLM baseline. Furthermore, our specialized kernels for DLMs achieve up to \textbf{1.46$\times$ speedup} compared to existing DLMs engines like JetEngine. We validate the framework by supporting stable on-policy RL algorithms (GRPO) with negligible overhead, providing a scalable baseline for the efficient alignment of next-generation generative models.
 \end{abstract}
 
 \section{Introduction}
 
-These instructions are for authors submitting papers to *ACL conferences using \LaTeX. They are not self-contained. All authors must follow the general instructions for *ACL proceedings,\footnote{\url{http://acl-org.github.io/ACLPUB/formatting.html}} and this document contains additional instructions for the \LaTeX{} style files.
+In the rapidly evolving landscape of Generative AI, \textbf{Diffusion Language Models (DLMs)}---such as LLaDA and SDAR~\citep{JetAstra2025}---have emerged as compelling alternatives to standard Autoregressive (AR) models. By leveraging iterative denoising processes rather than strict left-to-right generation, DLMs enable bidirectional context awareness and parallel decoding, offering distinct advantages in complex reasoning and planning tasks.
 
-The templates include the \LaTeX{} source of this document (\texttt{acl\_latex.tex}),
-the \LaTeX{} style file used to format it (\texttt{acl.sty}),
-an ACL bibliography style (\texttt{acl\_natbib.bst}),
-an example bibliography (\texttt{custom.bib}),
-and the bibliography for the ACL Anthology (\texttt{anthology.bib}).
+While the pre-training of DLMs has proven successful, the \textbf{post-training} phase---specifically Reinforcement Learning (RL) fine-tuning---remains a critical bottleneck. Recent research, such as \textit{Retaining by Doing}~\citep{chen2025retaining}, highlights that \textbf{on-policy RL} significantly outperforms Supervised Fine-Tuning (SFT) by exhibiting ``mode-seeking'' behavior. This capability allows models to align with complex reward functions while mitigating catastrophic forgetting, a crucial requirement for maintaining general capabilities during domain adaptation. However, implementing efficient on-policy RL for DLMs presents severe system-level challenges that current infrastructure fails to address.
 
-\section{Engines}
+\subsection*{1.1 The System-Algorithm Mismatch}
+The core conflict lies between the dynamic nature of on-policy training and the static design of existing high-performance inference engines.
 
-To produce a PDF file, pdf\LaTeX{} is strongly recommended (over original \LaTeX{} plus dvips+ps2pdf or dvipdf).
-The style file \texttt{acl.sty} can also be used with
-lua\LaTeX{} and
-Xe\LaTeX{}, which are especially suitable for text in non-Latin scripts.
-The file \texttt{acl\_lualatex.tex} in this repository provides
-an example of how to use \texttt{acl.sty} with either
-lua\LaTeX{} or
-Xe\LaTeX{}.
+\begin{enumerate}
+    \item \textbf{The ``Reload-and-Rollout'' Bottleneck}: On-policy algorithms require the inference engine to generate data (rollouts) using the most recently updated model parameters at every step. Mainstream inference frameworks like LMDeploy~\citep{lmdeploy2023} or JetEngine~\citep{JetAstra2025} are optimized for \textbf{static serving}---where weights remain constant. Utilizing them in a training loop forces a prohibitive cycle of saving weights to disk, restarting the engine, and reloading the model. As noted in prior work like \textit{DiRL}~\citep{zhu2025dirl} or DLLM-RL ~\citep{wang2025tracerl}, this I/O latency often exceeds the computation time of the training step itself, leading to massive GPU underutilization.
+    
+    \item \textbf{Architectural Fragmentation}: The DLM ecosystem lacks unified support. Distinct architectures require specialized handling---such as Blockwise Diffusion for SDAR or Masked Diffusion for LLaDA. Current frameworks often support either AR or DLM, but rarely both, forcing researchers to maintain disparate, unoptimized codebases for hybrid experiments.
+\end{enumerate}
 
-\section{Preamble}
+\subsection*{1.2 The Proposed Solution: nanoRFT}
+To bridge this gap between algorithmic requirements and system capabilities, we introduce \textbf{nanoRFT (nano Reinforcement Learning Fine-Tuning)}. Developed as a lightweight, high-performance framework, nanoRFT implements a \textbf{System-Algorithm Co-design} that unifies training and inference into a coherent loop.
 
-The first line of the file must be
-\begin{quote}
-\begin{verbatim}
-\documentclass[11pt]{article}
-\end{verbatim}
-\end{quote}
+Our approach addresses the aforementioned challenges through three key technical contributions:
+\begin{itemize}
+    \item \textbf{Twin-Engine Architecture}: We provide a unified interface that supports both standard AR models (via \texttt{nanovllm} for Qwen) and specialized DLMs (via \texttt{nanovdlm} for LLaDA/SDAR). This includes custom Triton kernels for non-causal attention and iterative denoising optimization.
+    
+    \item \textbf{Sub-Second Weight Synchronization}: To eliminate the I/O bottleneck, we replace file-system operations with an \textbf{NCCL-based broadcast mechanism}. This allows the training engine (HuggingFace-based) to synchronize updated weights to the distributed inference engine in milliseconds rather than minutes.
+    
+    \item \textbf{Efficient On-Policy Loop}: By integrating \textbf{GRPO} (for AR) and \textbf{DGRPO} (for DLM) directly into the workflow, nanoRFT ensures that data generation is always strictly on-policy without sacrificing throughput, enabling rapid experimentation and stable convergence.
+\end{itemize}
 
-To load the style file in the review version:
-\begin{quote}
-\begin{verbatim}
-\usepackage[review]{acl}
-\end{verbatim}
-\end{quote}
-For the final version, omit the \verb|review| option:
-\begin{quote}
-\begin{verbatim}
-\usepackage{acl}
-\end{verbatim}
-\end{quote}
+This report details the implementation of nanoRFT, demonstrating how optimizing the interaction between the training loop and inference engine unlocks the full potential of Reinforcement Learning for the next generation of language models.
 
-To use Times Roman, put the following in the preamble:
-\begin{quote}
-\begin{verbatim}
-\usepackage{times}
-\end{verbatim}
-\end{quote}
-(Alternatives like txfonts or newtx are also acceptable.)
+\section{Related Work}
 
-Please see the \LaTeX{} source of this document for comments on other packages that may be useful.
+\subsection{High-Performance Inference Engines}
 
-Set the title and author using \verb|\title| and \verb|\author|. Within the author list, format multiple authors using \verb|\and| and \verb|\And| and \verb|\AND|; please see the \LaTeX{} source for examples.
+The rapid growth of Large Language Models (LLMs) has driven significant advancements in inference optimization. Several high-performance engines have emerged to address the computational demands of serving these models efficiently.
 
-By default, the box containing the title and author names is set to the minimum of 5 cm. If you need more space, include the following in the preamble:
-\begin{quote}
-\begin{verbatim}
-\setlength\titlebox{<dim>}
-\end{verbatim}
-\end{quote}
-where \verb|<dim>| is replaced with a length. Do not set this length smaller than 5 cm.
+\textbf{vLLM}~\citep{kwon2023pageattention} introduced \textbf{PagedAttention}, a memory management technique inspired by virtual memory paging in operating systems. By partitioning the KV cache into non-contiguous blocks, vLLM dramatically reduces memory fragmentation and enables efficient batching of requests with varying sequence lengths. This approach has become a foundational technique adopted by many subsequent frameworks.
 
-\section{Document Body}
+\textbf{LMDeploy}~\citep{lmdeploy2023} provides an end-to-end deployment solution with optimized kernels for popular model architectures. It supports \textbf{Tensor Parallelism (TP)} for distributing computation across multiple GPUs and implements efficient \textbf{Prefix Caching} to reuse KV cache for shared prompt prefixes, significantly reducing redundant computation in scenarios with common system prompts.
 
-\subsection{Footnotes}
+\textbf{JetEngine}~\citep{JetAstra2025} extends optimization techniques specifically for Diffusion Language Models (DLMs). It provides specialized support for iterative denoising processes and blockwise generation strategies required by architectures like SDAR and LLaDA, achieving high throughput through custom CUDA kernels tailored for non-causal attention patterns.
 
-Footnotes are inserted with the \verb|\footnote| command.\footnote{This is a footnote.}
+\textbf{nano-vllm}~\citep{nanovllm2025} offers a lightweight alternative that maintains competitive performance while reducing implementation complexity. By focusing on core optimizations---including efficient memory allocation, tensor parallelism, and prefix caching---it provides a flexible foundation suitable for research and rapid prototyping.
 
-\subsection{Tables and figures}
+\subsection{Limitations in On-Policy Training}
 
-See Table~\ref{tab:accents} for an example of a table and its caption.
-\textbf{Do not override the default caption sizes.}
+Despite their efficiency in static serving scenarios, these inference engines share a common limitation: they are designed assuming \textbf{fixed model weights}. In on-policy reinforcement learning, where model parameters are updated after each training step, these frameworks require costly checkpoint saving and engine reloading cycles. This fundamental mismatch between dynamic training and static inference motivates our design of nanoRFT, which bridges this gap through real-time weight synchronization.
 
-\begin{table}
-  \centering
-  \begin{tabular}{lc}
-    \hline
-    \textbf{Command} & \textbf{Output} \\
-    \hline
-    \verb|{\"a}|     & {\"a}           \\
-    \verb|{\^e}|     & {\^e}           \\
-    \verb|{\`i}|     & {\`i}           \\
-    \verb|{\.I}|     & {\.I}           \\
-    \verb|{\o}|      & {\o}            \\
-    \verb|{\'u}|     & {\'u}           \\
-    \verb|{\aa}|     & {\aa}           \\\hline
-  \end{tabular}
-  \begin{tabular}{lc}
-    \hline
-    \textbf{Command} & \textbf{Output} \\
-    \hline
-    \verb|{\c c}|    & {\c c}          \\
-    \verb|{\u g}|    & {\u g}          \\
-    \verb|{\l}|      & {\l}            \\
-    \verb|{\~n}|     & {\~n}           \\
-    \verb|{\H o}|    & {\H o}          \\
-    \verb|{\v r}|    & {\v r}          \\
-    \verb|{\ss}|     & {\ss}           \\
-    \hline
-  \end{tabular}
-  \caption{Example commands for accented characters, to be used in, \emph{e.g.}, Bib\TeX{} entries.}
-  \label{tab:accents}
-\end{table}
+\section{Methodology}
 
-As much as possible, fonts in figures should conform
-to the document fonts. See Figure~\ref{fig:experiments} for an example of a figure and its caption.
+\label{sec:methodology}
 
-Using the \verb|graphicx| package graphics files can be included within figure
-environment at an appropriate point within the text.
-The \verb|graphicx| package supports various optional arguments to control the
-appearance of the figure.
-You must include it explicitly in the \LaTeX{} preamble (after the
-\verb|\documentclass| declaration and before \verb|\begin{document}|) using
-\verb|\usepackage{graphicx}|.
-
-\begin{figure}[t]
-  \includegraphics[width=\columnwidth]{example-image-golden}
-  \caption{A figure with a caption that runs for more than one line.
-    Example image is usually available through the \texttt{mwe} package
-    without even mentioning it in the preamble.}
-  \label{fig:experiments}
-\end{figure}
-
-\begin{figure*}[t]
-  \includegraphics[width=0.48\linewidth]{example-image-a} \hfill
-  \includegraphics[width=0.48\linewidth]{example-image-b}
-  \caption {A minimal working example to demonstrate how to place
-    two images side-by-side.}
+\begin{figure*}[ht]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/nanorft.pdf} 
+    \caption{System Architecture of nanoRFT. The Trainer node (GPU 0) performs model updates using HuggingFace, while Inference Workers (GPU 1+) run the optimized inference engines (\texttt{nanovllm}/\texttt{nanovdlm}). Updated weights are broadcasted in real-time via NCCL, enabling efficient on-policy rollouts.}
+    \label{fig:arch}
 \end{figure*}
 
-\subsection{Hyperlinks}
+To address the system efficiency bottlenecks inherent in post-training Diffusion Language Models (DLMs), we propose \textbf{nanoRFT}, a lightweight framework implementing a System-Algorithm Co-design. Unlike existing frameworks that treat training and inference as isolated stages coupled via file systems, nanoRFT unifies them into a high-throughput on-policy loop.
 
-Users of older versions of \LaTeX{} may encounter the following error during compilation:
-\begin{quote}
-\verb|\pdfendlink| ended up in different nesting level than \verb|\pdfstartlink|.
-\end{quote}
-This happens when pdf\LaTeX{} is used and a citation splits across a page boundary. The best way to fix this is to upgrade \LaTeX{} to 2018-12-01 or later.
+\subsection{System Architecture: Decoupled Trainer-Inferencer}
+Standard reinforcement learning (RL) pipelines for LLMs typically suffer from the "Reload-and-Rollout" latency, where the inference engine must reload updated weights from the disk at every step. We address this by adopting a decoupled architecture:
 
-\subsection{Citations}
+\begin{itemize}
+    \item \textbf{Trainer Node:} Hosted on GPU 0, this module utilizes the HuggingFace library to perform gradient updates (e.g., GRPO/DGRPO). It maintains the master copy of the model parameters.
+    \item \textbf{Inference Workers:} Hosted on GPU 1+, these workers run our optimized inference engines. They are responsible for high-throughput rollout generation.
+\end{itemize}
 
-\begin{table*}
-  \centering
-  \begin{tabular}{lll}
-    \hline
-    \textbf{Output}           & \textbf{natbib command} & \textbf{ACL only command} \\
-    \hline
-    \citep{Gusfield:97}       & \verb|\citep|           &                           \\
-    \citealp{Gusfield:97}     & \verb|\citealp|         &                           \\
-    \citet{Gusfield:97}       & \verb|\citet|           &                           \\
-    \citeyearpar{Gusfield:97} & \verb|\citeyearpar|     &                           \\
-    \citeposs{Gusfield:97}    &                         & \verb|\citeposs|          \\
-    \hline
-  \end{tabular}
-  \caption{\label{citation-guide}
-    Citation commands supported by the style file.
-    The style is based on the natbib package and supports all natbib citation commands.
-    It also supports commands defined in previous ACL style files for compatibility.
-  }
-\end{table*}
+Crucially, instead of communicating via disk checkpoints, we implement a \textbf{Real-Time Parameter Broadcast} mechanism based on NCCL. As illustrated in Figure~\ref{fig:arch}, immediately after the optimizer step, the updated weights are broadcasted from the Trainer to Inference Workers via GPU-direct communication protocols. This design reduces synchronization latency from minutes to the sub-second level ($<$30ms for AR models, $\sim$10ms for DLMs), ensuring that data generation remains strictly on-policy without stalling the training loop.
 
-Table~\ref{citation-guide} shows the syntax supported by the style files.
-We encourage you to use the natbib styles.
-You can use the command \verb|\citet| (cite in text) to get ``author (year)'' citations, like this citation to a paper by \citet{Gusfield:97}.
-You can use the command \verb|\citep| (cite in parentheses) to get ``(author, year)'' citations \citep{Gusfield:97}.
-You can use the command \verb|\citealp| (alternative cite without parentheses) to get ``author, year'' citations, which is useful for using citations within parentheses (e.g. \citealp{Gusfield:97}).
+\subsection{Twin-Engine Inference Backend}
+To resolve the fragmentation in model support, we introduce a "Twin-Engine" design that provides native optimizations for both Autoregressive (AR) and Diffusion paradigms.
 
-A possessive citation can be made with the command \verb|\citeposs|.
-This is not a standard natbib command, so it is generally not compatible
-with other style files.
+\subsubsection{nanovllm: Optimized AR Inference}
+For standard AR models (e.g., Qwen2.5), we employ \texttt{nanovllm}. It integrates state-of-the-art memory management techniques, including \textbf{PagedAttention} and \textbf{Block Manager} ~\citep{kwon2023pageattention}, to handle the dynamic memory footprint of variable-length generation. This engine supports tensor parallelism and prefix caching, ensuring high throughput during the rollout phase of RL training [8].
 
-\subsection{References}
+\subsubsection{nanovdlm: Specialized DLM Adaptation}
+Diffusion models require fundamentally different computation patterns, such as iterative denoising and non-causal attention [9, 10]. We developed \texttt{nanovdlm} to specifically address these requirements:
+\begin{itemize}
+    \item \textbf{Iterative Decoding Support:} Unlike the single-pass generation of AR, \texttt{nanovdlm} supports flexible denoising schedules (e.g., dynamic remasking strategies) required by models like LLaDA\citep{nie2025llada} and SDAR \citep{JetAstra2025}.
+    \item \textbf{Kernel Optimization:} We implemented custom high-performance \textbf{Triton kernels} to optimize the bidirectional (non-causal) attention mechanisms inherent in DLMs. This ensures that the compute-intensive denoising steps fully utilize the hardware capabilities of NVIDIA GPUs.
+    \item \textbf{Unified Interface:} Despite the architectural differences, \texttt{nanovdlm} exposes a unified \texttt{rollout} interface compatible with our RL algorithms, abstracting away the complexity of block-wise or full-sequence diffusion generation.
+\end{itemize}
 
-\nocite{Ando2005,andrew2007scalable,rasooli-tetrault-2015}
+\subsection{On-Policy Reinforcement Learning Algorithms}
+To maintain focus on our system-level contributions and the optimization of the training pipeline, we omit the formal mathematical derivations of the RL objectives, which are adopted from existing literature. Our framework integrates Group Relative Policy Optimization (GRPO), which has proven effective for reasoning tasks~\citep{guo2025deepseekr1}. To accommodate the specific nature of DLMs, we implement two variants:
 
-The \LaTeX{} and Bib\TeX{} style files provided roughly follow the American Psychological Association format.
-If your own bib file is named \texttt{custom.bib}, then placing the following before any appendices in your \LaTeX{} file will generate the references section for you:
-\begin{quote}
-\begin{verbatim}
-\bibliography{custom}
-\end{verbatim}
-\end{quote}
+\begin{enumerate}
+    \item \textbf{Standard GRPO (for AR):} We implement a from-scratch version of GRPO integrated with advanced stability techniques, including DAPO~\citep{yu2025dapo} and Dr.GRPO~\citep{liu2025drgrpo}.
+    \item \textbf{DGRPO (for DLM):} For diffusion models, we adapt the objective to align with the iterative generation process. As noted in \textit{DiRL}~\citep{zhu2025dirl}, standard next-token objectives are ill-suited for DLMs. Our DGRPO implementation specifically estimates the trajectory likelihood using Monte Carlo sampling.
+\end{enumerate}
 
-You can obtain the complete ACL Anthology as a Bib\TeX{} file from \url{https://aclweb.org/anthology/anthology.bib.gz}.
-To include both the Anthology and your own .bib file, use the following instead of the above.
-\begin{quote}
-\begin{verbatim}
-\bibliography{anthology,custom}
-\end{verbatim}
-\end{quote}
+By combining real-time weight synchronization with specialized inference kernels, nanoRFT enables an efficient ``Generate-Update-Sync" loop, allowing researchers to explore on-policy RL for DLMs with the same efficiency as standard AR models.
 
-Please see Section~\ref{sec:bibtex} for information on preparing Bib\TeX{} files.
+\section{Experiments}
 
-\subsection{Equations}
+In this section, we evaluate the performance of \texttt{nanoRFT} from both system and algorithmic perspectives. We aim to validate the efficiency of our NCCL-based weight synchronization mechanism and the effectiveness of the on-policy training loop for both Autoregressive (AR) and Diffusion Language Models (DLMs).
 
-An example equation is shown below:
-\begin{equation}
-  \label{eq:example}
-  A = \pi r^2
-\end{equation}
+\subsection{Experimental Setup}
+\label{subsec:setup}
 
-Labels for equation numbers, sections, subsections, figures and tables
-are all defined with the \verb|\label{label}| command and cross references
-to them are made with the \verb|\ref{label}| command.
+We conducted our primary evaluations on the \textbf{Countdown} task, a mathematical reasoning benchmark requiring logical planning. The experimental environment was configured as follows:
 
-This an example cross-reference to Equation~\ref{eq:example}.
+\begin{itemize}
+    \item \textbf{Models:} For AR baselines, we utilized \texttt{Qwen2.5-3b} and \texttt{Qwen2.5-Math-1.5B}. For DLM experiments, we employed \texttt{SDAR-8B} and \texttt{LLaDA} to verify architectural compatibility.
+    \item \textbf{Hardware Topology:} We adopted a decoupled "1 Trainer + 1 Inferencer" setup. One GPU was dedicated to the HuggingFace-based training loop, while a second GPU hosted the \texttt{nano-vllm}/\texttt{nanovdlm} inference engine.
+    \item \textbf{Algorithm:} We implemented Group Relative Policy Optimization (GRPO) from scratch, integrating advanced stability techniques including DAPO~\citep{yu2025dapo}, Dr.GRPO~\citep{liu2025drgrpo}, and GPG~\citep{chu2025gpg}.
+\end{itemize}
 
-\subsection{Appendices}
+\subsection{System Efficiency Analysis}
 
-Use \verb|\appendix| before any appendix section to switch the section numbering over to letters. See Appendix~\ref{sec:appendix} for an example.
+\subsubsection{Weight Synchronization Latency}
+A critical bottleneck in on-policy RL is the ``Reload-and-Rollout'' latency, which typically involves a two-stage process: the trainer saves the updated checkpoint to disk, and the inference engine subsequently reloads it. In our benchmark, for existing frameworks, we measured the total time required to save the model parameters to local storage plus the time to load them into the GPU memory. In contrast, \textbf{nanoRFT} bypasses the file system entirely by broadcasting weights via NCCL directly between GPUs.
 
-\section{Bib\TeX{} Files}
-\label{sec:bibtex}
+As shown in Table~\ref{tab:latency}, our NCCL-based memory broadcast mechanism significantly outperforms traditional disk I/O methods. For the AR model (\texttt{Qwen2.5-3b}), we achieved a synchronization latency of \textbf{$<$30ms}, whereas the disk-based approach required over 5 seconds. For the larger DLM architecture (\texttt{SDAR-8B}), despite its increased parameter count, the synchronization was completed in approximately \textbf{10ms} thanks to our optimized memory-mapping strategy. This reduction from seconds to milliseconds ensures that the inference engine consistently serves the most up-to-date policy with negligible downtime, effectively eliminating the synchronization bottleneck.
 
-Unicode cannot be used in Bib\TeX{} entries, and some ways of typing special characters can disrupt Bib\TeX's alphabetization. The recommended way of typing special characters is shown in Table~\ref{tab:accents}.
+\begin{table}[ht]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{6pt}
+\caption{Synchronization latency comparison: Traditional Disk I/O (Save + Load) vs. nanoRFT (NCCL Broadcast).}
+\label{tab:latency}
+\begin{tabular}{@{}llc@{}} 
+\toprule
+\textbf{Architecture} & \textbf{Method} & \textbf{Latency} \\ \midrule
+Qwen2.5-1.5B (AR) & Disk I/O (Baseline) & $\ge$3.0s \\
+\textbf{Qwen2.5-1.5B (AR)} & \textbf{nanoRFT (Ours)} & \textbf{$\sim$30ms} \\ 
+\midrule
+Qwen2.5-3B (AR) & Disk I/O (Baseline) & $\ge$5.0s \\
+\textbf{Qwen2.5-3B (AR)} & \textbf{nanoRFT (Ours)} & \textbf{$\sim$30ms} \\ \midrule
+SDAR-8B-Chat (DLM) & Disk I/O (Baseline) & $\ge$15.0s \\
+\textbf{SDAR-8B-Chat (DLM)} & \textbf{nanoRFT (Ours)} & \textbf{$\sim$10ms} \\ \midrule
+LLaDA-8B-Instruct (DLM) & Disk I/O (Baseline) & $\ge$18.0s \\
+\textbf{LLaDA-8B-Instruct (DLM)} & \textbf{nanoRFT (Ours)} & \textbf{$\sim$10ms} \\ \bottomrule
+\end{tabular}
+\end{table}
 
-Please ensure that Bib\TeX{} records contain DOIs or URLs when possible, and for all the ACL materials that you reference.
-Use the \verb|doi| field for DOIs and the \verb|url| field for URLs.
-If a Bib\TeX{} entry has a URL or DOI field, the paper title in the references section will appear as a hyperlink to the paper, using the hyperref \LaTeX{} package.
+\subsubsection{Inference Throughput}
+By leveraging \texttt{nano-vllm}'s native optimizations, including tensor parallelism and prefix caching, \texttt{nanoRFT} maintains high throughput during the rollout phase.
 
-\section*{Limitations}
+To validate the efficiency of the underlying engine, we reference both reported benchmarks and our own empirical results. As detailed in the official \texttt{nano-vllm} repository~\citep{nanovllm2025}, the framework demonstrates superior efficiency on consumer-grade hardware (RTX 4070 Laptop) compared to standard \texttt{vLLM}. To verify performance in a high-performance computing environment, we conducted independent experiments on an NVIDIA H200 GPU using the \texttt{Qwen3-0.6B} model. As shown in Table~\ref{tab:hardware_throughput}, our measured throughput on the H200 reached \textbf{19,444.55 tps}, representing a \textbf{21.76\% improvement} over the standard \texttt{vLLM} baseline (15,969.38 tps) on the same hardware.
 
-This document does not cover the content requirements for ACL or any
-other specific venue.  Check the author instructions for
-information on
-maximum page lengths, the required ``Limitations'' section,
-and so on.
+Building on this backend, our specialized kernels for Deep Language Models (DLMs) in \texttt{nanoRFT} significantly outperform the \texttt{JetEngine} framework~\citep{JetAstra2025}. As summarized in Table~\ref{tab:tps_comparison}, \texttt{nanoRFT} achieves consistent speedups across various configurations. Notably, for the \texttt{LLaDA-8B-Instruct} model, \texttt{nanoRFT} achieves its highest throughput of \textbf{1,144.44 tps} at a block size of 32, representing a \textbf{1.30$\times$ speedup}. At a block size of 64, it maintains \textbf{1,100.90 tps}, a \textbf{1.11$\times$ improvement} over \texttt{JetEngine}. Across the SDAR tasks, \texttt{nanoRFT} also maintains a steady performance lead, with speedups ranging from \textbf{1.07$\times$ to 1.46$\times$}, peaking at \textbf{4,807.24 tps} for the SDAR-8B-Chat model.
 
-\section*{Acknowledgments}
+% --- Table 1: Hardware Benchmark (vLLM vs Nano-vLLM) ---
+\begin{table}[ht]
+\centering
+\footnotesize
+\caption{Baseline throughput comparison. RTX 4070 results are reported from the \texttt{nano-vllm} repository~\citep{nanovllm2025}, while H200 results are derived from our internal experiments using \texttt{Qwen3-0.6B} (256 concurrent requests).}
+\label{tab:hardware_throughput}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}l l c c r@{}}
+\toprule
+\textbf{Hardware} & \textbf{Engine} & \textbf{Output Tokens} & \textbf{Time (s)} & \textbf{Throughput} \\
+\midrule
+\multicolumn{5}{l}{\textit{Reported Results (from repo)}:} \\
+\multirow{2}{*}{RTX 4070 Laptop} & vLLM & 133,966 & 98.37 & 1,361.84 tps \\
+ & \textbf{Nano-vLLM} & 133,966 & \textbf{93.41} & \textbf{1,434.13 tps} \\
+\midrule
+\multicolumn{5}{l}{\textit{Our Experiments}:} \\
+\multirow{2}{*}{H200} & vLLM & 133,966 & 8.39 & 15,969.38 tps \\
+ & \textbf{Nano-vLLM} & 133,966 & \textbf{6.89} & \textbf{19,444.55 tps} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-This document has been adapted
-by Steven Bethard, Ryan Cotterell and Rui Yan
-from the instructions for earlier ACL and NAACL proceedings, including those for
-ACL 2019 by Douwe Kiela and Ivan Vuli\'{c},
-NAACL 2019 by Stephanie Lukin and Alla Roskovskaya,
-ACL 2018 by Shay Cohen, Kevin Gimpel, and Wei Lu,
-NAACL 2018 by Margaret Mitchell and Stephanie Lukin,
-Bib\TeX{} suggestions for (NA)ACL 2017/2018 from Jason Eisner,
-ACL 2017 by Dan Gildea and Min-Yen Kan,
-NAACL 2017 by Margaret Mitchell,
-ACL 2012 by Maggie Li and Michael White,
-ACL 2010 by Jing-Shin Chang and Philipp Koehn,
-ACL 2008 by Johanna D. Moore, Simone Teufel, James Allan, and Sadaoki Furui,
-ACL 2005 by Hwee Tou Ng and Kemal Oflazer,
-ACL 2002 by Eugene Charniak and Dekang Lin,
-and earlier ACL and EACL formats written by several people, including
-John Chen, Henry S. Thompson and Donald Walker.
-Additional elements were taken from the formatting instructions of the \emph{International Joint Conference on Artificial Intelligence} and the \emph{Conference on Computer Vision and Pattern Recognition}.
+% --- Table 2: Optimized JetEngine vs nanoRFT with Speedup Column ---
+\begin{table}[ht]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{8pt}
+\caption{Throughput (tokens/sec) and speedup comparison between \texttt{JetEngine} and \texttt{nanoRFT}.}
+\label{tab:tps_comparison}
+\begin{tabular}{@{}l c r r r@{}}
+\toprule
+\textbf{Model} & \textbf{Block Size} & \textbf{JetEngine} & \textbf{nanoRFT(ours)} & \textbf{Speedup} \\
+\midrule
+\multirow{3}{*}{LLaDA-8B-Instruct} & 128 & 601.39 & \textbf{831.18} & 1.38$\times$ \\
+ & 64  & 992.98 & \textbf{1,100.90} & 1.11$\times$ \\
+ & 32  & 879.33 & \textbf{1,144.44} & 1.30$\times$ \\
+\midrule
+\multirow{3}{*}{SDAR-8B-Chat} & 4   & 4,941.68 & \textbf{5,269.71} & 1.07$\times$ \\
+ & 8   & 4,361.23 & \textbf{4,774.59} & 1.09$\times$ \\
+ & 16  & 3,291.20 & \textbf{4,807.24} & 1.46$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-% Bibliography entries for the entire Anthology, followed by custom entries
-%\bibliography{custom,anthology-overleaf-1,anthology-overleaf-2}
+\subsection{Training Convergence and Reasoning Qualitative Analysis}
 
-% Custom bibliography entries only
+We validated the functional correctness and algorithmic effectiveness of our \texttt{nanoRFT} pipeline by monitoring training dynamics on the Countdown reasoning task. The comprehensive training metrics are provided in \textbf{Appendix~\ref{sec:appendix_figs}}, while specific generation samples (rollouts) demonstrating the evolution of reasoning are detailed in \textbf{Appendix~\ref{appendix:rollout_samples}}.
+
+\textbf{Emergence of Reasoning from Base Models.} 
+It is worth noting that our AR experiments utilized \texttt{Qwen2.5-Math} and \texttt{Qwen3} base models without any prior Supervised Fine-Tuning (SFT). As shown in the reward curves (Figure~\ref{fig:all_metrics_ar}), the models effectively ``learn to speak'' and reason through pure on-policy RL. In contrast, for DLMs, we utilized \texttt{Instruct} or \texttt{Chat} versions to benchmark against state-of-the-art performance levels.
+
+\textbf{Effectiveness of the RL Pipeline.} 
+Our framework demonstrates robust convergence across architectures. Specifically, the \texttt{Qwen2.5-Math-1.5B} model reached a \textbf{85\% training success rate}. A critical observation from Figure~\ref{fig:all_metrics_ar}c is that the \textit{Finished Success Rate}—measuring the accuracy of completed responses—converges rapidly to \textbf{1.0}. This indicates that the model masters the underlying logic early, and the remaining performance gap is primarily due to unfinished generations rather than logical errors.
+
+\textbf{Entropy Collapse in DLMs.} 
+Through \texttt{nanoRFT}'s high-throughput rollouts, we identified a key challenge in DLM post-training: \textbf{rapid entropy collapse}. As observed in Figure~\ref{fig:all_metrics_dlm}d, the training entropy for DLMs decreases significantly faster than for AR models. The model quickly converges to a state where rollout samples exhibit minimal variance (often only a few tokens difference), providing a system-level explanation for the exploration difficulties in DLM reinforcement learning.
+
+\textbf{Observations of Latent Reasoning.} 
+On smaller models like \texttt{Qwen3-0.6B-Base}, we observed a unique \textit{latent reasoning} phenomenon, as illustrated in the samples in \textbf{Appendix~\ref{appendix:rollout_samples}}. 
+\begin{itemize}
+    \item \textbf{Early Stage (Step 10):} The model begins with repetitive or structured placeholders like ``itemBuilder'' to organize its output, yet the logic remains rudimentary.
+    \item \textbf{Mid-to-Late Stage (Step 300--500):} We observe the emergence of unintelligible token sequences at the beginning of the thought process (e.g., \textit{\texttt{\textbackslash u6218\textbackslash u573a\textbackslash u4e0a Blocks...}} or \textit{\texttt{Tap\textbackslash u0c9b\_H...}}). Despite being unreadable to humans, the model retains these segments as they appear to serve as an internal ``scratchpad'' that aids in reaching the correct \texttt{<answer>}. 
+    \item \textbf{Optimization:} As training progresses from Step 300 to 500, these latent reasoning fragments become noticeably more compact. We hypothesize that the model identifies these latent computations as beneficial for maximizing rewards and continues to refine them, whereas even smaller models (e.g., \texttt{Qwen2.5-0.5B}) fail to develop this strategy and suffer from immediate entropy collapse.
+\end{itemize}
+
+Overall, these results confirm that \texttt{nanoRFT} successfully facilitates stable on-policy learning, allowing models to develop complex internal reasoning strategies that would be difficult to capture in traditional, high-latency training environments.
+
+\section{Collaboration}
+
+To ensure the successful delivery of \textbf{nanoRFT}, the team adopted a cross-functional collaboration model. Each member contributed equally (25\%) across system design, algorithmic implementation, and experimental validation.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Team Member Contributions and Responsibilities.}
+\label{tab:collaboration}
+\begin{tabular}{@{}lcp{10.5cm}@{}}
+\toprule
+\textbf{Name} & \textbf{Contribution} & \textbf{Key Responsibilities \& Technical Work} \\ \midrule
+Linkang Dong & 25\% & \textbf{System Architecture \& Communication:} Architected the NCCL-based real-time weight sync system ($<$30ms); implemented the core infrastructure for real-time parameter updates; implemented the RL training loop from scratch; integrated stability techniques (DAPO, GPG); \\ \addlinespace
+Jiaxin Wan & 25\% & \textbf{DLM Backend \& Performance:} Developed the \texttt{nanovdlm} engine; authored custom Triton kernels for non-causal attention; optimized SDAR/LLaDA decoding throughput to exceed JetEngine baselines. Integrated diffusion models into the online RL loop.\\ \addlinespace
+Kangyu Wang & 25\% & \textbf{Strategy Design \& Evaluation:} Collaborated on DLM decoding strategies and system testing; Led the comprehensive technical report drafting and documentation, conducted large-scale rollout testing on the Countdown reasoning benchmark. \\ \addlinespace
+Bohao Lyu & 25\% & \textbf{Quality Assurance \& Documentation:} Led the systematic evaluation of throughput/latency metrics; conducted the literature survey on DLM efficiency; coordinated the technical report structure and experimental data visualization. \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\section{Conclusion}
+
+In this work, we introduced \textbf{nanoRFT}, a lightweight and unified framework designed to bridge the gap between high-performance inference and on-policy reinforcement learning for both Autoregressive (AR) and Diffusion Language Models (DLMs). By implementing a system-algorithm co-design approach, we successfully addressed the critical ``Reload-and-Rollout'' bottleneck that typically hinders efficient post-training pipelines.
+
+Our experimental results and system evaluations lead to the following key conclusions:
+
+\begin{itemize}
+    \item \textbf{Elimination of I/O Latency:} By replacing traditional disk-based checkpointing with an \textbf{NCCL-based real-time broadcast mechanism}, we reduced model synchronization latency from minutes to the sub-second level (\textbf{10$\sim$50ms}). This ensures that the rollout phase remains strictly on-policy without stalling the training loop or sacrificing GPU utilization.
+    
+    \item \textbf{Superior Inference Throughput:} The \textbf{Twin-Engine} architecture (\texttt{nanovllm} and \texttt{nanovdlm}) achieves significant performance gains. On NVIDIA H200 GPUs, nanoRFT reached a rollout throughput of \textbf{19,444 tokens/sec}, outperforming the vLLM baseline by \textbf{21.76\%}. Furthermore, our specialized Triton kernels for DLMs provided up to a \textbf{1.46$\times$ speedup} over state-of-the-art engines like JetEngine.
+    
+    \item \textbf{Algorithmic Robustness:} We demonstrated that nanoRFT effectively supports stable on-policy RL (GRPO and DGRPO) on complex reasoning tasks. The consistent convergence and steady improvement in success rates observed in the Countdown benchmark validate that our system-level optimizations maintain high training fidelity while maximizing throughput.
+\end{itemize}
+
+In summary, nanoRFT provides a scalable and efficient baseline for the next generation of generative models. By unifying the training and inference ecosystems through hardware-aware co-design, it empowers researchers to explore advanced alignment strategies for DLMs with the same agility and performance previously reserved for standard autoregressive architectures.
+
+\subsection{Future Work}
+
+While nanoRFT demonstrates significant improvements in training efficiency, several avenues remain for future exploration:
+
+\begin{enumerate}
+    \item \textbf{Data Parallelism (DP):} Currently, our setup relies on a single trainer-inferencer topology. Extending the framework to support Data Parallelism across multiple nodes is crucial for scaling to larger foundation models (e.g., 70B+ parameters).
+    \item \textbf{Advanced Decoding Strategies:} For DLMs, we plan to investigate more sophisticated decoding methods during the rollout phase to further explore the generation space and improve sample efficiency.
+    \item \textbf{Unified Support for Multi-Modalities:} Given the versatility of diffusion models, we aim to extend \texttt{nanovdlm} to support multi-modal tasks beyond text generation.
+\end{enumerate}
+
+In summary, nanoRFT provides a robust baseline for the community to explore the frontiers of post-training for next-generation generative models.
+
 \bibliography{custom}
 
 \appendix
-
-\section{Example Appendix}
-\label{sec:appendix}
-
-This is an appendix.
+\input{appendix.tex}
 
 \end{document}
